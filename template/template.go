@@ -20,8 +20,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-
-	"github.com/sirupsen/logrus"
 )
 
 var delimiter = "\\$"
@@ -113,7 +111,7 @@ func SubstituteWith(template string, mapping Mapping, pattern *regexp.Regexp, su
 
 		value, ok := mapping(substitution)
 		if !ok {
-			logrus.Warnf("The %q variable is not set. Defaulting to a blank string.", substitution)
+			//logrus.Warnf("The %q variable is not set. Defaulting to a blank string.", substitution)
 		}
 		return value
 	})

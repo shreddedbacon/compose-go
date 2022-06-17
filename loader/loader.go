@@ -58,6 +58,10 @@ type Options struct {
 	SkipConsistencyCheck bool
 	// Skip extends
 	SkipExtends bool
+	// Ignore non-string key errors
+	IgnoreNonStringKeyErrors bool
+	// Ignore missing env_files
+	IgnoreMissingEnvFileCheck bool
 	// Interpolation options
 	Interpolate *interp.Options
 	// Discard 'env_file' entries after resolving to 'environment' section
@@ -126,7 +130,7 @@ func WithSkipValidation(opts *Options) {
 
 // ParseYAML reads the bytes from a file, parses the bytes into a mapping
 // structure, and returns it.
-func ParseYAML(source []byte) (map[string]interface{}, error) {
+func ParseYAML(source []byte, opts *Options) (map[string]interface{}, error) {
 	var cfg interface{}
 	if err := yaml.Unmarshal(source, &cfg); err != nil {
 		return nil, err
@@ -135,7 +139,7 @@ func ParseYAML(source []byte) (map[string]interface{}, error) {
 	if !ok {
 		return nil, errors.Errorf("Top-level object must be a mapping")
 	}
-	converted, err := convertToStringKeysRecursive(cfgMap, "")
+	converted, err := convertToStringKeysRecursive(cfgMap, "", opts)
 	if err != nil {
 		return nil, err
 	}
@@ -253,7 +257,7 @@ func NormalizeProjectName(s string) string {
 }
 
 func parseConfig(b []byte, opts *Options) (map[string]interface{}, error) {
-	yml, err := ParseYAML(b)
+	yml, err := ParseYAML(b, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -408,12 +412,15 @@ func createTransformHook(additionalTransformers ...Transformer) mapstructure.Dec
 }
 
 // keys need to be converted to strings for jsonschema
-func convertToStringKeysRecursive(value interface{}, keyPrefix string) (interface{}, error) {
+func convertToStringKeysRecursive(value interface{}, keyPrefix string, opts *Options) (interface{}, error) {
 	if mapping, ok := value.(map[interface{}]interface{}); ok {
 		dict := make(map[string]interface{})
 		for key, entry := range mapping {
 			str, ok := key.(string)
 			if !ok {
+				if opts.IgnoreNonStringKeyErrors {
+					continue
+				}
 				return nil, formatInvalidKeyError(keyPrefix, key)
 			}
 			var newKeyPrefix string
@@ -422,7 +429,7 @@ func convertToStringKeysRecursive(value interface{}, keyPrefix string) (interfac
 			} else {
 				newKeyPrefix = fmt.Sprintf("%s.%s", keyPrefix, str)
 			}
-			convertedEntry, err := convertToStringKeysRecursive(entry, newKeyPrefix)
+			convertedEntry, err := convertToStringKeysRecursive(entry, newKeyPrefix, opts)
 			if err != nil {
 				return nil, err
 			}
@@ -434,7 +441,7 @@ func convertToStringKeysRecursive(value interface{}, keyPrefix string) (interfac
 		var convertedList []interface{}
 		for index, entry := range list {
 			newKeyPrefix := fmt.Sprintf("%s[%d]", keyPrefix, index)
-			convertedEntry, err := convertToStringKeysRecursive(entry, newKeyPrefix)
+			convertedEntry, err := convertToStringKeysRecursive(entry, newKeyPrefix, opts)
 			if err != nil {
 				return nil, err
 			}
@@ -490,7 +497,7 @@ func loadServiceWithExtends(filename, name string, servicesDict map[string]inter
 		return nil, fmt.Errorf("cannot extend service %q in %s: service not found", name, filename)
 	}
 
-	serviceConfig, err := LoadService(name, target.(map[string]interface{}), workingDir, lookupEnv, opts.ResolvePaths, opts.ConvertWindowsPaths)
+	serviceConfig, err := LoadService(name, target.(map[string]interface{}), workingDir, lookupEnv, opts.ResolvePaths, opts.ConvertWindowsPaths, opts.IgnoreMissingEnvFileCheck)
 	if err != nil {
 		return nil, err
 	}
@@ -553,7 +560,7 @@ func loadServiceWithExtends(filename, name string, servicesDict map[string]inter
 
 // LoadService produces a single ServiceConfig from a compose file Dict
 // the serviceDict is not validated if directly used. Use Load() to enable validation
-func LoadService(name string, serviceDict map[string]interface{}, workingDir string, lookupEnv template.Mapping, resolvePaths bool, convertPaths bool) (*types.ServiceConfig, error) {
+func LoadService(name string, serviceDict map[string]interface{}, workingDir string, lookupEnv template.Mapping, resolvePaths bool, convertPaths bool, ignoreMissingEnvFileCheck bool) (*types.ServiceConfig, error) {
 	serviceConfig := &types.ServiceConfig{
 		Scale: 1,
 	}
@@ -562,7 +569,7 @@ func LoadService(name string, serviceDict map[string]interface{}, workingDir str
 	}
 	serviceConfig.Name = name
 
-	if err := resolveEnvironment(serviceConfig, workingDir, lookupEnv); err != nil {
+	if err := resolveEnvironment(serviceConfig, workingDir, lookupEnv, ignoreMissingEnvFileCheck); err != nil {
 		return nil, err
 	}
 
@@ -602,7 +609,7 @@ func convertVolumePath(volume types.ServiceVolumeConfig) types.ServiceVolumeConf
 	return volume
 }
 
-func resolveEnvironment(serviceConfig *types.ServiceConfig, workingDir string, lookupEnv template.Mapping) error {
+func resolveEnvironment(serviceConfig *types.ServiceConfig, workingDir string, lookupEnv template.Mapping, ignoreMissingEnvFileCheck bool) error {
 	environment := types.MappingWithEquals{}
 
 	if len(serviceConfig.EnvFile) > 0 {
@@ -610,6 +617,10 @@ func resolveEnvironment(serviceConfig *types.ServiceConfig, workingDir string, l
 			filePath := absPath(workingDir, envFile)
 			file, err := os.Open(filePath)
 			if err != nil {
+				// if the env_file is missing, skip it
+				if strings.Contains(err.Error(), "no such file or directory") && ignoreMissingEnvFileCheck {
+					return nil
+				}
 				return err
 			}
 			defer file.Close()

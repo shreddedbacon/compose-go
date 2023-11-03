@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/compose-spec/compose-go/dotenv"
 	"github.com/compose-spec/compose-go/utils"
@@ -328,7 +329,7 @@ PROFILES:
 	}
 	p.ApplyProfiles(profiles)
 
-	return p.ResolveServicesEnvironment(true)
+	return p.ResolveServicesEnvironment(true, false)
 }
 
 // WithoutUnnecessaryResources drops networks/volumes/secrets/configs that are not referenced by active services
@@ -528,7 +529,7 @@ func (p *Project) MarshalJSON() ([]byte, error) {
 }
 
 // ResolveServicesEnvironment parse env_files set for services to resolve the actual environment map for services
-func (p Project) ResolveServicesEnvironment(discardEnvFiles bool) error {
+func (p Project) ResolveServicesEnvironment(discardEnvFiles bool, ignoreMissingEnvFileCheck bool) error {
 	for i, service := range p.Services {
 		service.Environment = service.Environment.Resolve(p.Environment.Resolve)
 
@@ -545,7 +546,12 @@ func (p Project) ResolveServicesEnvironment(discardEnvFiles bool) error {
 		for _, envFile := range service.EnvFile {
 			b, err := os.ReadFile(envFile)
 			if err != nil {
-				return errors.Wrapf(err, "Failed to load %s", envFile)
+				if strings.Contains(err.Error(), "no such file or directory") && ignoreMissingEnvFileCheck {
+					service.EnvFile = nil
+					continue
+				} else {
+					return errors.Wrapf(err, "Failed to load %s", envFile)
+				}
 			}
 
 			fileVars, err := dotenv.ParseWithLookup(bytes.NewBuffer(b), resolve)

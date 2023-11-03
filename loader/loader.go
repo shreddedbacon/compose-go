@@ -62,6 +62,10 @@ type Options struct {
 	SkipResolveEnvironment bool
 	// Interpolation options
 	Interpolate *interp.Options
+	// Ignore non-string key errors
+	IgnoreNonStringKeyErrors bool
+	// Ignore missing env_files
+	IgnoreMissingEnvFileCheck bool
 	// Discard 'env_file' entries after resolving to 'environment' section
 	discardEnvFiles bool
 	// Set project projectName
@@ -166,10 +170,10 @@ func WithProfiles(profiles []string) func(*Options) {
 
 // ParseYAML reads the bytes from a file, parses the bytes into a mapping
 // structure, and returns it.
-func ParseYAML(source []byte) (map[string]interface{}, error) {
+func ParseYAML(source []byte, opts *Options) (map[string]interface{}, error) {
 	r := bytes.NewReader(source)
 	decoder := yaml.NewDecoder(r)
-	m, _, err := parseYAML(decoder)
+	m, _, err := parseYAML(decoder, opts)
 	return m, err
 }
 
@@ -182,7 +186,7 @@ type PostProcessor interface {
 	Apply(config *types.Config) error
 }
 
-func parseYAML(decoder *yaml.Decoder) (map[string]interface{}, PostProcessor, error) {
+func parseYAML(decoder *yaml.Decoder, opts *Options) (map[string]interface{}, PostProcessor, error) {
 	var cfg interface{}
 	processor := ResetProcessor{target: &cfg}
 
@@ -191,7 +195,7 @@ func parseYAML(decoder *yaml.Decoder) (map[string]interface{}, PostProcessor, er
 	}
 	stringMap, ok := cfg.(map[string]interface{})
 	if ok {
-		converted, err := convertToStringKeysRecursive(stringMap, "")
+		converted, err := convertToStringKeysRecursive(stringMap, "", opts)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -201,7 +205,7 @@ func parseYAML(decoder *yaml.Decoder) (map[string]interface{}, PostProcessor, er
 	if !ok {
 		return nil, nil, errors.Errorf("Top-level object must be a mapping")
 	}
-	converted, err := convertToStringKeysRecursive(cfgMap, "")
+	converted, err := convertToStringKeysRecursive(cfgMap, "", opts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -396,7 +400,7 @@ func load(ctx context.Context, configDetails types.ConfigDetails, opts *Options,
 	project.ApplyProfiles(opts.Profiles)
 
 	if !opts.SkipResolveEnvironment {
-		err := project.ResolveServicesEnvironment(opts.discardEnvFiles)
+		err := project.ResolveServicesEnvironment(opts.discardEnvFiles, opts.IgnoreMissingEnvFileCheck)
 		if err != nil {
 			return nil, err
 		}
@@ -426,7 +430,7 @@ func projectName(details types.ConfigDetails, opts *Options) (string, error) {
 	if !projectNameImperativelySet {
 		var pjNameFromConfigFile string
 		for _, configFile := range details.ConfigFiles {
-			yml, err := ParseYAML(configFile.Content)
+			yml, err := ParseYAML(configFile.Content, opts)
 			if err != nil {
 				// HACK: the way that loading is currently structured, this is
 				// a duplicative parse just for the `name`. if it fails, we
@@ -481,7 +485,7 @@ func NormalizeProjectName(s string) string {
 }
 
 func parseConfig(decoder *yaml.Decoder, opts *Options) (map[string]interface{}, PostProcessor, error) {
-	yml, postProcessor, err := parseYAML(decoder)
+	yml, postProcessor, err := parseYAML(decoder, opts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -644,7 +648,7 @@ func createTransformHook(additionalTransformers ...Transformer) mapstructure.Dec
 }
 
 // keys need to be converted to strings for jsonschema
-func convertToStringKeysRecursive(value interface{}, keyPrefix string) (interface{}, error) {
+func convertToStringKeysRecursive(value interface{}, keyPrefix string, opts *Options) (interface{}, error) {
 	if mapping, ok := value.(map[string]interface{}); ok {
 		for key, entry := range mapping {
 			var newKeyPrefix string
@@ -653,7 +657,7 @@ func convertToStringKeysRecursive(value interface{}, keyPrefix string) (interfac
 			} else {
 				newKeyPrefix = fmt.Sprintf("%s.%s", keyPrefix, key)
 			}
-			convertedEntry, err := convertToStringKeysRecursive(entry, newKeyPrefix)
+			convertedEntry, err := convertToStringKeysRecursive(entry, newKeyPrefix, opts)
 			if err != nil {
 				return nil, err
 			}
@@ -666,6 +670,9 @@ func convertToStringKeysRecursive(value interface{}, keyPrefix string) (interfac
 		for key, entry := range mapping {
 			str, ok := key.(string)
 			if !ok {
+				if opts.IgnoreNonStringKeyErrors {
+					continue
+				}
 				return nil, formatInvalidKeyError(keyPrefix, key)
 			}
 			var newKeyPrefix string
@@ -674,7 +681,7 @@ func convertToStringKeysRecursive(value interface{}, keyPrefix string) (interfac
 			} else {
 				newKeyPrefix = fmt.Sprintf("%s.%s", keyPrefix, str)
 			}
-			convertedEntry, err := convertToStringKeysRecursive(entry, newKeyPrefix)
+			convertedEntry, err := convertToStringKeysRecursive(entry, newKeyPrefix, opts)
 			if err != nil {
 				return nil, err
 			}
@@ -686,7 +693,7 @@ func convertToStringKeysRecursive(value interface{}, keyPrefix string) (interfac
 		var convertedList []interface{}
 		for index, entry := range list {
 			newKeyPrefix := fmt.Sprintf("%s[%d]", keyPrefix, index)
-			convertedEntry, err := convertToStringKeysRecursive(entry, newKeyPrefix)
+			convertedEntry, err := convertToStringKeysRecursive(entry, newKeyPrefix, opts)
 			if err != nil {
 				return nil, err
 			}

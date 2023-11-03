@@ -263,7 +263,7 @@ var sampleConfig = types.Config{
 }
 
 func TestParseYAML(t *testing.T) {
-	dict, err := ParseYAML([]byte(sampleYAML))
+	dict, err := ParseYAML([]byte(sampleYAML), &Options{})
 	assert.NilError(t, err)
 	assert.Check(t, is.DeepEqual(sampleDict, dict))
 }
@@ -2178,7 +2178,7 @@ func TestLoadServiceWithEnvFile(t *testing.T) {
 			},
 		},
 	}
-	err = p.ResolveServicesEnvironment(false)
+	err = p.ResolveServicesEnvironment(false, false)
 	assert.NilError(t, err)
 	service, err := p.GetService("Test")
 	assert.NilError(t, err)

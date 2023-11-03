@@ -22,8 +22,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-
-	"github.com/sirupsen/logrus"
 )
 
 var delimiter = "\\$"
@@ -203,7 +201,8 @@ func DefaultReplacementAppliedFunc(substring string, mapping Mapping, cfg *Confi
 
 	value, ok := mapping(substitution)
 	if !ok && cfg.logging {
-		logrus.Warnf("The %q variable is not set. Defaulting to a blank string.", substitution)
+		// would be really good to get this configurable
+		// logrus.Warnf("The %q variable is not set. Defaulting to a blank string.", substitution)
 	}
 
 	return value, ok, nil

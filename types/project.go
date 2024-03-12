@@ -387,7 +387,7 @@ func (p *Project) WithServicesEnabled(names ...string) (*Project, error) {
 		return newProject, err
 	}
 
-	return newProject.WithServicesEnvironmentResolved(true)
+	return newProject.WithServicesEnvironmentResolved(true, false)
 }
 
 // WithoutUnnecessaryResources drops networks/volumes/secrets/configs that are not referenced by active services
@@ -602,7 +602,7 @@ func (p *Project) MarshalJSON() ([]byte, error) {
 
 // WithServicesEnvironmentResolved parses env_files set for services to resolve the actual environment map for services
 // It returns a new Project instance with the changes and keep the original Project unchanged
-func (p Project) WithServicesEnvironmentResolved(discardEnvFiles bool) (*Project, error) {
+func (p Project) WithServicesEnvironmentResolved(discardEnvFiles bool, ignoreMissingEnvFiles bool) (*Project, error) {
 	newProject := p.deepCopy()
 	for i, service := range newProject.Services {
 		service.Environment = service.Environment.Resolve(newProject.Environment.Resolve)
@@ -619,7 +619,8 @@ func (p Project) WithServicesEnvironmentResolved(discardEnvFiles bool) (*Project
 
 		for _, envFile := range service.EnvFiles {
 			if _, err := os.Stat(envFile.Path); os.IsNotExist(err) {
-				if envFile.Required {
+				// since lagoon doesn't do anything with these files, they can be missing and lagoon won't care
+				if envFile.Required && !ignoreMissingEnvFiles {
 					return nil, fmt.Errorf("env file %s not found: %w", envFile.Path, err)
 				}
 				continue
